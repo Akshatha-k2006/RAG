@@ -1,30 +1,1746 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Campus Handbook Assistant</title>
-<style>
-body{margin:0;background:#f3f6fa;color:#172435;font:16px/1.6 system-ui,sans-serif}main{max-width:1100px;margin:auto;padding:32px}h1{font-size:34px;line-height:1.2;margin-bottom:8px}h2{font-size:22px;margin-top:0}small{color:#53677d}.grid{display:grid;grid-template-columns:330px 1fr;gap:24px;margin-top:24px}.card{background:white;padding:24px;border:1px solid #dbe2eb;border-radius:12px;margin-bottom:20px}label{display:block;margin:14px 0 5px}select,input,textarea,button{font:inherit;box-sizing:border-box;max-width:100%}select,input,textarea{width:100%;padding:8px;border:1px solid #a4b1c2;border-radius:5px}textarea{min-height:95px}button{cursor:pointer;background:#144f78;border:0;border-radius:6px;color:white;padding:10px 15px;margin:12px 8px 0 0}button:disabled{opacity:.5;cursor:wait}pre,.answer{white-space:pre-wrap;overflow-wrap:anywhere}.answer{font-size:18px}pre{font-size:13px;background:#f3f6fa;padding:12px;max-height:400px;overflow:auto}.note{border-left:4px solid #ce8800;padding-left:14px}#status{min-height:26px;font-weight:600}summary{cursor:pointer}article{border-top:1px solid #dbe2eb;padding:14px 0}article p{margin-bottom:0}@media(max-width:800px){.grid{grid-template-columns:1fr}main{padding:16px}}
-</style>
-<main><small>RAG FROM SCRATCH · STUDENT LAB</small><h1>Campus Handbook Assistant</h1>
-<p>Load documents → split into chunks → retrieve evidence → generate a cited answer.</p>
-<p class="note">Sample policies are fictional teaching data, not VCET rules. Source labels and scores are aids for inspection; they do not prove an answer is correct.</p>
-<div class="grid"><section><div class="card"><h2>1. Build your index</h2>
-<label for="files">Your documents (optional)</label><input id="files" type="file" multiple accept=".txt,.md,.pdf"><small>UTF-8 text or text-based PDF; under 5 MB total. No OCR.</small>
-<label for="mode">Retrieval method</label><select id="mode"><option value="keyword">TF-IDF baseline · no model needed</option><option value="semantic">Semantic embeddings · Ollama needed</option></select>
-<label for="size">Chunk size in words</label><input id="size" type="number" min="20" max="200" value="100">
-<label for="overlap">Overlap in words</label><input id="overlap" type="number" min="0" max="199" value="20">
-<button id="sample">Build sample index</button><button id="upload">Index selected files</button>
-<details><summary>Index preview</summary><pre id="preview">Build an index to see the chunks.</pre></details></div>
-<div class="card"><h2>2. Choose an experiment</h2><label for="answer_mode">Answer mode</label><select id="answer_mode"><option value="evidence">Evidence only · retrieval, no generation</option><option value="rag">RAG · evidence + local LLM</option><option value="plain">LLM only · evidence withheld</option></select>
-<label for="model">Generation model</label><select id="model"><option>qwen2.5:1.5b</option><option>qwen2.5:0.5b</option></select>
-<label for="k">Top k passages</label><input id="k" type="number" min="1" max="5" value="3"><small>Changing retrieval method or chunk settings requires rebuilding the index. The app uses the last built index.</small></div></section>
-<section><div class="card"><h2>3. Ask and inspect</h2><label for="question">Question</label><textarea id="question">How many books can a third year student borrow, and for how long?</textarea><button id="ask">Ask</button><p id="status" role="status" aria-live="polite"></p><div id="answer" class="answer"></div></div>
-<div class="card"><h2>Retrieved evidence</h2><small>For LLM-only mode, these passages are shown for comparison but are not sent to the LLM.</small><div id="sources"></div><details><summary>Inspect the exact user prompt</summary><pre id="prompt"></pre></details><p><small>The RAG system instruction is visible as SYSTEM in rag.py. The prompt above is the user message.</small></p><pre id="checks"></pre></div></section></div>
-<small>Local single-user demo · no account or API key · restart clears the in-memory index</small></main>
-<script>
-const $=id=>document.getElementById(id);let indexed=false;
-async function api(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;}
-async function job(fn){document.querySelectorAll('button').forEach(b=>b.disabled=true);$('status').textContent='Working… Model requests can take several minutes on CPU.';try{await fn()}catch(e){$('status').textContent=e.message}finally{document.querySelectorAll('button').forEach(b=>b.disabled=false)}}
-async function index(sample){indexed=false;$('answer').textContent='';$('sources').replaceChildren();$('prompt').textContent='';$('checks').textContent='';await job(async()=>{let files=[];if(!sample){const chosen=[...$('files').files];if(!chosen.length)throw Error('Select documents first.');if(chosen.reduce((s,f)=>s+f.size,0)>5000000)throw Error('Keep files below 5 MB total.');for(const f of chosen){const bytes=new Uint8Array(await f.arrayBuffer());let bin='';for(const b of bytes)bin+=String.fromCharCode(b);files.push({name:f.name,data:btoa(bin)})}}const d=await api('/api/index',{sample,files,mode:$('mode').value,size:Number($('size').value),overlap:Number($('overlap').value)});indexed=true;$('preview').textContent=JSON.stringify(d.preview,null,2);$('status').textContent=`Built ${d.chunks} chunks using ${d.mode} retrieval in ${d.seconds}s. ${d.warnings.join(' ')}`})}
-$('sample').onclick=()=>index(true);$('upload').onclick=()=>index(false);
-$('ask').onclick=()=>job(async()=>{if(!indexed)throw Error('Build an index first.');const d=await api('/api/ask',{question:$('question').value,k:Number($('k').value),answer_mode:$('answer_mode').value,model:$('model').value});$('answer').textContent=d.answer;$('prompt').textContent=d.prompt;$('checks').textContent=d.citations?JSON.stringify(d.citations,null,2)+'\nLabel syntax only; manually verify support for each claim.':'';$('sources').replaceChildren();for(const h of d.hits){const a=document.createElement('article'),b=document.createElement('strong'),p=document.createElement('p');b.textContent=`[${h.label}] ${h.source} · page ${h.page} · chunk ${h.chunk} · cosine ${h.score}`;p.textContent=h.text;a.append(b,p);$('sources').append(a)}$('status').textContent=`${d.answer_mode} mode · ${d.seconds}s. Similarity is not confidence.`});
-</script></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Campus Handbook Assistant</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172435;
+        --muted: #53677d;
+        --bg: #f3f6fa;
+        --card: #fff;
+        --line: #dbe2eb;
+        --line-strong: #a4b1c2;
+        --brand: #144f78;
+        --brand-dark: #0e3a59;
+        --brand-soft: #e6f0f7;
+        --amber: #ce8800;
+        --amber-soft: #fff5df;
+        --ok: #1d7a4d;
+        --ok-soft: #e5f4ec;
+        --bad: #b3261e;
+        --bad-soft: #fbe9e7;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+      body {
+        background:
+          radial-gradient(
+            900px 520px at 8% -8%,
+            rgba(20, 79, 120, 0.16),
+            transparent 60%
+          ),
+          radial-gradient(
+            700px 480px at 100% 0%,
+            rgba(206, 136, 0, 0.13),
+            transparent 60%
+          ),
+          radial-gradient(
+            800px 600px at 60% 110%,
+            rgba(20, 79, 120, 0.1),
+            transparent 60%
+          ),
+          linear-gradient(180deg, #f7fafd 0%, #eaf1f8 100%);
+        background-attachment: fixed;
+        color: var(--ink);
+        font:
+          16px/1.5 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 27, 38, 0.08);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition:
+          opacity 0.18s ease,
+          visibility 0.18s ease;
+        z-index: 15;
+      }
+      body.chat-open::before {
+        opacity: 1;
+        visibility: visible;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      small,
+      .muted {
+        color: var(--muted);
+      }
+
+      /* ---------- layout: slim setup (1/4) + chat (3/4) ---------- */
+      .shell {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+      .shell.nosb {
+        grid-template-columns: 1fr;
+      }
+      .shell.nosb .left {
+        display: none;
+      }
+      .left,
+      .right {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .left {
+        position: relative;
+        background: radial-gradient(
+            rgba(20, 79, 120, 0.13) 1.2px,
+            transparent 1.3px
+          )
+          0 0 / 24px 24px;
+        overflow-y: auto;
+        padding: 0;
+      }
+      .right {
+        background: var(--bg);
+      }
+      .right {
+        position: fixed;
+        z-index: 20;
+        right: 24px;
+        bottom: 92px;
+        width: min(700px, calc(100vw - 48px));
+        height: min(760px, calc(100vh - 116px));
+        background: linear-gradient(180deg, #ffffff, #f3f6fa);
+        border: 1px solid rgba(20, 79, 120, 0.12);
+        border-radius: 18px;
+        box-shadow:
+          0 18px 36px rgba(23, 36, 53, 0.14),
+          0 8px 18px rgba(20, 79, 120, 0.1);
+        overflow: hidden;
+        display: none;
+      }
+      .right.open {
+        display: flex;
+        animation: popup-in 0.18s ease-out;
+      }
+      @keyframes popup-in {
+        from {
+          opacity: 0;
+          transform: translateY(8px) scale(0.98);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      /* ---------- setup sidebar ---------- */
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      .logo {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--brand-soft);
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .eyebrow {
+        font-size: 11.5px;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .brand b {
+        font-size: 17.5px;
+        line-height: 1.15;
+      }
+      .note {
+        background: var(--amber-soft);
+        border-left: 4px solid var(--amber);
+        padding: 6px 10px;
+        border-radius: 0 8px 8px 0;
+        font-size: 13px;
+        margin: 0 0 14px;
+      }
+      .card {
+        border: 1px solid rgba(20, 79, 120, 0.14);
+        border-radius: 20px;
+        padding: 22px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow:
+          0 24px 48px rgba(23, 36, 53, 0.1),
+          0 6px 14px rgba(20, 79, 120, 0.08);
+        backdrop-filter: blur(6px);
+      }
+      .card h2 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 15.5px;
+        margin: 0 0 10px;
+      }
+      .num {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--brand);
+        color: #fff;
+        font-size: 13.5px;
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .form {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 10px;
+      }
+      .form .full {
+        grid-column: 1/-1;
+      }
+      label {
+        display: block;
+        font-size: 13.5px;
+        font-weight: 600;
+        margin-bottom: 2px;
+      }
+      input[type="number"],
+      select,
+      textarea {
+        width: 100%;
+        padding: 6px 8px;
+        background: var(--card);
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        outline: none;
+      }
+      input[type="file"] {
+        width: 100%;
+        padding: 5px;
+        border: 1px dashed var(--line-strong);
+        border-radius: 7px;
+        background: var(--bg);
+        font-size: 13.5px;
+      }
+      input:focus,
+      select:focus,
+      textarea:focus {
+        border-color: var(--brand);
+        box-shadow: 0 0 0 3px rgba(20, 79, 120, 0.15);
+      }
+      .hint {
+        display: block;
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .btns {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      .btn {
+        cursor: pointer;
+        border: 1px solid var(--brand);
+        border-radius: 8px;
+        padding: 7px 13px;
+        font-weight: 600;
+        background: var(--brand);
+        color: #fff;
+      }
+      .btn:hover {
+        background: var(--brand-dark);
+      }
+      .btn.ghost {
+        background: transparent;
+        color: var(--brand);
+      }
+      .btn.ghost:hover {
+        background: var(--brand-soft);
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: wait;
+      }
+      .btn:focus-visible,
+      .mini button:focus-visible,
+      .cite:focus-visible {
+        outline: 3px solid rgba(20, 79, 120, 0.35);
+        outline-offset: 1px;
+      }
+      .stats {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .stats span {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        padding: 1px 10px;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .stats[hidden] {
+        display: none;
+      }
+      .stats b {
+        color: var(--ink);
+      }
+      details {
+        margin-top: 12px;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--brand);
+      }
+      .chunk {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 9px;
+        margin-top: 6px;
+        background: var(--bg);
+        font-size: 13.5px;
+      }
+      .chunk b {
+        color: var(--brand);
+      }
+      .empty {
+        color: var(--muted);
+        padding: 10px;
+        text-align: center;
+        border: 1px dashed var(--line-strong);
+        border-radius: 8px;
+        margin-top: 8px;
+        font-size: 13.5px;
+      }
+      .foot {
+        font-size: 13px;
+        color: var(--muted);
+        text-align: center;
+        margin: 14px 0 0;
+      }
+
+      /* ---------- chat ---------- */
+      .chat-head {
+        flex: none;
+        padding: 10px 18px;
+        border-bottom: 1px solid var(--line);
+        background: var(--card);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--brand);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        font-size: 13.5px;
+        flex: none;
+      }
+      .avatar svg {
+        width: 18px;
+        height: 18px;
+      }
+      .chat-head b {
+        display: block;
+        line-height: 1.15;
+      }
+      .chat-head small {
+        font-size: 13.5px;
+      }
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--line-strong);
+        margin-right: 5px;
+      }
+      .dot.live {
+        background: #2fb36b;
+      }
+      .chat-head .grow {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+      }
+      .chat-head .btn {
+        padding: 4px 11px;
+        font-size: 13.5px;
+      }
+
+      .msgs {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .msgs > * {
+        width: 100%;
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .msg {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        max-width: 900px;
+      }
+      .msg.user {
+        align-items: flex-end;
+      }
+      .msg.bot {
+        align-items: flex-start;
+      }
+      .bubble {
+        padding: 10px 14px;
+        border-radius: 14px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: 16.5px;
+        max-width: 85%;
+      }
+      .msg.bot .bubble {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-bottom-left-radius: 4px;
+      }
+      .msg.user .bubble {
+        background: var(--brand);
+        color: #fff;
+        border-bottom-right-radius: 4px;
+      }
+      .msg.err .bubble {
+        background: var(--bad-soft);
+        color: var(--bad);
+        border: 1px solid #f1c3be;
+      }
+      .msg.sys .bubble {
+        background: var(--amber-soft);
+        font-size: 14px;
+        border: 1px solid #f0dcaa;
+      }
+      .cite {
+        cursor: pointer;
+        border: 0;
+        background: var(--brand);
+        color: #fff;
+        border-radius: 5px;
+        padding: 0 6px;
+        font-size: 13.5px;
+        font-weight: 700;
+        margin: 0 1px;
+      }
+      .cite:hover {
+        background: var(--brand-dark);
+      }
+
+      /* inline sources / prompt / checks */
+      .mini {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        font-size: 13.5px;
+        color: var(--muted);
+        align-items: center;
+      }
+      .mini button {
+        cursor: pointer;
+        background: var(--card);
+        border: 1px solid var(--line-strong);
+        border-radius: 99px;
+        padding: 1px 11px;
+        color: var(--brand);
+        font-size: 13.5px;
+        font-weight: 600;
+      }
+      .mini button:hover {
+        background: var(--brand-soft);
+      }
+      .mini button[aria-expanded="true"] {
+        background: var(--brand);
+        color: #fff;
+        border-color: var(--brand);
+      }
+      .panel {
+        width: 100%;
+        max-width: 760px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .panel[hidden] {
+        display: none;
+      }
+      .hit {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px 12px;
+        background: var(--card);
+        transition: 0.3s;
+        border-left: 4px solid var(--brand);
+      }
+      .hit.flash {
+        border-color: var(--amber);
+        box-shadow: 0 0 0 3px rgba(206, 136, 0, 0.3);
+      }
+      .hit header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        font-size: 13.5px;
+      }
+      .tag {
+        background: var(--brand);
+        color: #fff;
+        border-radius: 6px;
+        padding: 0 8px;
+        font-weight: 700;
+      }
+      .meta {
+        color: var(--muted);
+      }
+      .bar {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+      }
+      .bar i {
+        display: block;
+        width: 60px;
+        height: 6px;
+        border-radius: 9px;
+        background: var(--line);
+        overflow: hidden;
+      }
+      .bar i span {
+        display: block;
+        height: 100%;
+        background: var(--brand);
+      }
+      .hit p {
+        margin: 6px 0 0;
+        font-size: 14.5px;
+      }
+      .panel pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font:
+          12px/1.5 ui-monospace,
+          Consolas,
+          monospace;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+        margin: 0;
+        max-height: 260px;
+        overflow: auto;
+      }
+      .checks {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .pill {
+        border-radius: 99px;
+        padding: 2px 10px;
+        font-size: 13.5px;
+        font-weight: 600;
+      }
+      .pill.ok {
+        background: var(--ok-soft);
+        color: var(--ok);
+      }
+      .pill.bad {
+        background: var(--bad-soft);
+        color: var(--bad);
+      }
+      .pill.neutral {
+        background: var(--brand-soft);
+        color: var(--brand);
+      }
+
+      .typing {
+        display: flex;
+        gap: 4px;
+        padding: 12px 14px !important;
+      }
+      .typing span {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--brand);
+        opacity: 0.35;
+        animation: b 1s infinite;
+      }
+      .typing span:nth-child(2) {
+        animation-delay: 0.15s;
+      }
+      .typing span:nth-child(3) {
+        animation-delay: 0.3s;
+      }
+      @keyframes b {
+        0%,
+        80%,
+        100% {
+          opacity: 0.25;
+          transform: none;
+        }
+        40% {
+          opacity: 1;
+          transform: translateY(-4px);
+        }
+      }
+
+      /* ---------- composer ---------- */
+      .dock {
+        flex: none;
+        border-top: 1px solid var(--line);
+        background: var(--card);
+        padding: 8px 18px 8px;
+      }
+      .dock > * {
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .row textarea {
+        resize: none;
+        min-height: 42px;
+        max-height: 120px;
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .row .btn {
+        height: 42px;
+        padding: 0 22px;
+      }
+      #status {
+        margin: 4px 2px 0;
+        font-size: 13px;
+        color: var(--muted);
+        min-height: 16px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* header controls */
+      .ctl {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .ctl label {
+        display: inline;
+        margin: 0;
+        font-size: 13.5px;
+      }
+      .ctl select {
+        width: auto;
+        max-width: 230px;
+        padding: 4px 6px;
+        font-size: 13.5px;
+      }
+      .ctl input[type="number"] {
+        width: 56px;
+        padding: 4px 6px;
+        font-size: 13.5px;
+      }
+      .chat-head {
+        position: relative;
+        padding-right: 58px;
+        flex-wrap: wrap;
+        row-gap: 6px;
+      }
+      .chat-head .grow {
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .mobonly {
+        display: none;
+      }
+      .launcher {
+        position: fixed;
+        z-index: 30;
+        right: 24px;
+        bottom: 24px;
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        border: 0;
+        border-radius: 50%;
+        background: var(--brand);
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(20, 79, 120, 0.3);
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease;
+      }
+      .launcher:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 28px rgba(20, 79, 120, 0.38);
+      }
+      .launcher:focus-visible,
+      .close-chat:focus-visible {
+        outline: 3px solid rgba(20, 79, 120, 0.35);
+        outline-offset: 3px;
+      }
+      .launcher svg {
+        width: 26px;
+        height: 26px;
+      }
+      .close-chat {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        margin: 0;
+        padding: 3px 10px !important;
+      }
+      /* ---------- small screens: setup becomes an overlay ---------- */
+      @media (max-width: 900px) {
+        .shell {
+          display: block;
+          position: relative;
+        }
+        .right {
+          right: 12px;
+          bottom: 84px;
+          width: calc(100vw - 24px);
+          height: min(720px, calc(100vh - 104px));
+        }
+        .bubble {
+          max-width: 94%;
+        }
+      }
+      @media (max-width: 500px) {
+        .launcher {
+          right: 16px;
+          bottom: 16px;
+        }
+        .right {
+          right: 8px;
+          bottom: 80px;
+          width: calc(100vw - 16px);
+          height: calc(100vh - 96px);
+          border-radius: 14px;
+        }
+      }
+
+      /* ---------- landing page (before the chat is opened) ---------- */
+      .landing {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 22px 32px 48px;
+        position: relative;
+      }
+      .topnav {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 40px;
+      }
+      .topnav .pill-note {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        padding: 4px 13px;
+        font-size: 13.5px;
+        color: var(--muted);
+      }
+      .topnav .pill-note i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #2fb36b;
+        box-shadow: 0 0 0 4px rgba(47, 179, 107, 0.18);
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: 1.05fr 1fr;
+        gap: 44px;
+        align-items: center;
+      }
+      .chip {
+        display: inline-block;
+        background: var(--brand-soft);
+        color: var(--brand);
+        border: 1px solid rgba(20, 79, 120, 0.18);
+        border-radius: 99px;
+        padding: 4px 14px;
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .hero h1 {
+        font-size: clamp(36px, 5vw, 58px);
+        line-height: 1.06;
+        letter-spacing: -0.02em;
+        margin: 18px 0 16px;
+      }
+      .hero h1 em {
+        font-style: normal;
+        color: var(--brand);
+        background: linear-gradient(
+          transparent 62%,
+          rgba(206, 136, 0, 0.3) 62%
+        );
+        padding: 0 4px;
+        border-radius: 3px;
+      }
+      .lead {
+        font-size: 19px;
+        line-height: 1.55;
+        color: var(--muted);
+        max-width: 560px;
+        margin: 0 0 24px;
+      }
+      .cta {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-bottom: 22px;
+      }
+      .btn.big {
+        font-size: 17px;
+        padding: 13px 24px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 10px 22px rgba(20, 79, 120, 0.28);
+      }
+      .btn.big:hover {
+        transform: translateY(-1px);
+      }
+      .btn.big svg {
+        width: 22px;
+        height: 22px;
+      }
+      .hero .note {
+        max-width: 560px;
+        background: rgba(255, 245, 223, 0.85);
+      }
+      .card .sub {
+        margin: -4px 0 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .card h2 {
+        font-size: 18px;
+      }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-top: 52px;
+        counter-reset: step;
+      }
+      .step {
+        position: relative;
+        background: rgba(255, 255, 255, 0.85);
+        border: 1px solid rgba(20, 79, 120, 0.12);
+        border-radius: 16px;
+        padding: 18px 18px 16px;
+        box-shadow: 0 8px 20px rgba(23, 36, 53, 0.06);
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease;
+      }
+      .step:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 14px 28px rgba(23, 36, 53, 0.1);
+      }
+      .step:not(:last-child)::after {
+        content: "→";
+        position: absolute;
+        right: -14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--line-strong);
+        font-size: 18px;
+        z-index: 1;
+      }
+      .step .ico {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: var(--brand);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        margin-bottom: 12px;
+      }
+      .step .ico svg {
+        width: 22px;
+        height: 22px;
+      }
+      .step h3 {
+        margin: 0 0 4px;
+        font-size: 16.5px;
+      }
+      .step h3 small {
+        color: var(--amber);
+        font-size: 13px;
+        font-weight: 700;
+        margin-right: 6px;
+      }
+      .step p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .landing .foot {
+        margin-top: 36px;
+      }
+      /* launcher polish */
+      .launcher {
+        animation: pulse 2.6s ease-out infinite;
+      }
+      body.chat-open .launcher,
+      .launcher[aria-expanded="true"] {
+        animation: none;
+      }
+      @keyframes pulse {
+        0% {
+          box-shadow:
+            0 8px 24px rgba(20, 79, 120, 0.3),
+            0 0 0 0 rgba(20, 79, 120, 0.4);
+        }
+        70%,
+        100% {
+          box-shadow:
+            0 8px 24px rgba(20, 79, 120, 0.3),
+            0 0 0 16px rgba(20, 79, 120, 0);
+        }
+      }
+      .launcher-tip {
+        position: fixed;
+        z-index: 29;
+        right: 92px;
+        bottom: 34px;
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 8px 14px;
+        font-size: 14.5px;
+        font-weight: 600;
+        box-shadow: 0 10px 24px rgba(23, 36, 53, 0.14);
+      }
+      .launcher-tip::after {
+        content: "";
+        position: absolute;
+        right: -6px;
+        top: 50%;
+        width: 11px;
+        height: 11px;
+        background: #fff;
+        border-top: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        transform: translateY(-50%) rotate(45deg);
+      }
+      .launcher-tip[hidden] {
+        display: none;
+      }
+      @media (max-width: 900px) {
+        .landing {
+          padding: 16px 18px 120px;
+        }
+        .topnav {
+          margin-bottom: 26px;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+        .steps {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .step::after {
+          display: none;
+        }
+        .launcher-tip {
+          display: none;
+        }
+      }
+      @media (max-width: 520px) {
+        .steps {
+          grid-template-columns: 1fr;
+        }
+        .topnav .pill-note {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell" id="shell">
+      <!-- ================= LEFT: setup ================= -->
+      <aside class="left" aria-label="Setup">
+        <div class="landing">
+          <nav class="topnav">
+            <div class="brand" style="margin: 0">
+              <div class="logo" aria-hidden="true">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#144f78"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M4 5a2 2 0 0 1 2-2h12v16H6a2 2 0 0 0-2 2z" />
+                  <path d="M4 19V5" />
+                  <path d="M9 8h6M9 12h4" />
+                </svg>
+              </div>
+              <b>Campus Handbook Assistant</b>
+            </div>
+            <span class="pill-note"><i></i>Local · no account or API key</span>
+          </nav>
+
+          <section class="hero">
+            <div>
+              <span class="chip">RAG from Scratch · Student Lab</span>
+              <h1>Ask your campus handbook <em>anything.</em></h1>
+              <p class="lead">
+                Load documents, split them into chunks, retrieve the evidence
+                and get a cited answer &mdash; every step visible, all running
+                on your own machine.
+              </p>
+              <div class="cta">
+                <button class="btn big" id="heroChat" type="button">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <rect x="4" y="6" width="16" height="13" rx="3" />
+                    <path
+                      d="M9 11h.01M15 11h.01M8 15h8M12 2v4M8 3l1 2M16 3l-1 2"
+                    />
+                  </svg>
+                  Chat with Campus AI
+                </button>
+                <span class="muted">Build an index first &rarr;</span>
+              </div>
+              <p class="note">
+                Sample policies are fictional teaching data, not VCET rules.
+                Source labels and scores are aids for inspection; they do not
+                prove an answer is correct.
+              </p>
+            </div>
+
+            <section class="card">
+              <h2><span class="num">1</span>Build your index</h2>
+              <p class="sub">
+                Pick your documents and chunk settings, then build.
+              </p>
+              <div class="form">
+                <div class="full">
+                  <label for="files">Your documents (optional)</label>
+                  <input
+                    id="files"
+                    type="file"
+                    multiple
+                    accept=".txt,.md,.pdf"
+                  />
+                  <span class="hint"
+                    >UTF-8 text or text-based PDF; under 5 MB total. No
+                    OCR.</span
+                  >
+                </div>
+                <div class="full">
+                  <label for="mode">Retrieval method</label>
+                  <select id="mode">
+                    <option value="keyword">TF-IDF · no model needed</option>
+                    <option value="semantic">Semantic · Ollama needed</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="size">Chunk size (words)</label>
+                  <input
+                    id="size"
+                    type="number"
+                    min="20"
+                    max="200"
+                    value="100"
+                  />
+                </div>
+                <div>
+                  <label for="overlap">Overlap (words)</label>
+                  <input
+                    id="overlap"
+                    type="number"
+                    min="0"
+                    max="199"
+                    value="20"
+                  />
+                </div>
+              </div>
+              <div class="btns">
+                <button class="btn" id="sample">Build sample index</button>
+                <button class="btn ghost" id="upload">
+                  Index selected files
+                </button>
+              </div>
+              <span class="hint" style="margin-top: 8px"
+                >Changing retrieval method or chunk settings requires rebuilding
+                the index. The app uses the last built index.</span
+              >
+              <div class="stats" id="stats" hidden>
+                <span><b id="s-chunks">–</b> chunks</span
+                ><span><b id="s-mode">–</b></span>
+                <span>index <b id="s-build">–</b></span
+                ><span>last answer <b id="s-ask">–</b></span>
+              </div>
+              <details>
+                <summary>Index preview</summary>
+                <div id="previewBox">
+                  <div class="empty">Build an index to see the chunks.</div>
+                </div>
+                <pre id="preview" hidden></pre>
+              </details>
+            </section>
+          </section>
+
+          <section class="steps" aria-label="How it works">
+            <div class="step">
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"
+                  />
+                  <path d="M14 3v5h5M9 13h6M9 17h4" />
+                </svg>
+              </div>
+              <h3><small>01</small>Load</h3>
+              <p>Read your TXT, MD or text-based PDF files.</p>
+            </div>
+            <div class="step">
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="3" y="4" width="18" height="4" rx="1" />
+                  <rect x="3" y="10" width="18" height="4" rx="1" />
+                  <rect x="3" y="16" width="12" height="4" rx="1" />
+                </svg>
+              </div>
+              <h3><small>02</small>Chunk</h3>
+              <p>Split text into overlapping word windows.</p>
+            </div>
+            <div class="step">
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m20 20-3.5-3.5" />
+                </svg>
+              </div>
+              <h3><small>03</small>Retrieve</h3>
+              <p>Rank passages with TF-IDF or embeddings.</p>
+            </div>
+            <div class="step">
+              <div class="ico">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"
+                  />
+                  <path
+                    d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"
+                  />
+                </svg>
+              </div>
+              <h3><small>04</small>Generate</h3>
+              <p>Answer with citations from a local LLM.</p>
+            </div>
+          </section>
+
+          <p class="foot">
+            Local single-user demo · no account or API key · restart clears the
+            in-memory index
+          </p>
+        </div>
+      </aside>
+
+      <!-- ================= RIGHT: chat ================= -->
+      <main class="right" id="chatPopup" aria-label="Chatbot">
+        <div class="chat-head">
+          <div class="avatar" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="6" width="16" height="13" rx="3" />
+              <path d="M9 11h.01M15 11h.01M8 15h8M12 2v4M8 3l1 2M16 3l-1 2" />
+            </svg>
+          </div>
+          <div>
+            <b>Campus AI Assistant</b
+            ><small class="muted"
+              ><span class="dot" id="dot"></span
+              ><span id="dotText">No index yet</span></small
+            >
+          </div>
+          <div class="grow">
+            <div class="ctl">
+              <label for="answer_mode">Mode</label>
+              <select id="answer_mode">
+                <option value="evidence">Evidence only · no generation</option>
+                <option value="rag">RAG · evidence + local LLM</option>
+                <option value="plain">LLM only · evidence withheld</option>
+              </select>
+            </div>
+            <div class="ctl">
+              <label for="model">Model</label>
+              <select id="model">
+                <option>qwen2.5:1.5b</option>
+                <option>qwen2.5:0.5b</option>
+              </select>
+            </div>
+            <div class="ctl">
+              <label for="k">Top k</label
+              ><input id="k" type="number" min="1" max="5" value="3" />
+            </div>
+            <button class="btn ghost" id="clear" type="button">Clear</button>
+            <button
+              class="btn ghost close-chat"
+              id="closeChat"
+              type="button"
+              aria-label="Close Campus AI Assistant"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <div class="msgs" id="msgs" role="log" aria-live="polite"></div>
+
+        <form class="dock" id="form">
+          <div class="row">
+            <textarea
+              id="question"
+              rows="1"
+              aria-label="Question"
+              placeholder="Ask about library, laboratory or project rules…"
+            ></textarea>
+            <button class="btn" id="ask" type="submit">Ask</button>
+          </div>
+          <p id="status" role="status" aria-live="polite"></p>
+        </form>
+      </main>
+    </div>
+    <span class="launcher-tip" id="tip">Ask the handbook 👋</span>
+    <button
+      class="launcher"
+      id="chatLauncher"
+      type="button"
+      aria-label="Ask Campus AI"
+      aria-controls="chatPopup"
+      aria-expanded="false"
+      title="Ask Campus AI"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <rect x="4" y="6" width="16" height="13" rx="3" />
+        <path d="M9 11h.01M15 11h.01M8 15h8M12 2v4M8 3l1 2M16 3l-1 2" />
+      </svg>
+    </button>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let indexed = false,
+        busy = false;
+
+      /* ---------- helpers ---------- */
+      async function api(path, body) {
+        const r = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        let d;
+        try {
+          d = await r.json();
+        } catch {
+          throw Error("Server returned an unreadable response.");
+        }
+        if (!r.ok) throw Error(d.error || "Request failed");
+        return d;
+      }
+      function setBusy(on) {
+        busy = on;
+        document.querySelectorAll("button.btn").forEach((b) => {
+          if (!["clear", "closeChat", "heroChat"].includes(b.id))
+            b.disabled = on;
+        });
+      }
+      function el(tag, cls, text) {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+      }
+      function scrollChat() {
+        const m = $("msgs");
+        m.scrollTop = m.scrollHeight;
+      }
+      function setLive(on, text) {
+        $("dot").classList.toggle("live", on);
+        $("dotText").textContent = text;
+      }
+
+      function setChatOpen(open) {
+        $("chatPopup").classList.toggle("open", open);
+        document.body.classList.toggle("chat-open", open);
+        $("chatLauncher").setAttribute("aria-expanded", open);
+        $("chatLauncher").setAttribute(
+          "aria-label",
+          open ? "Close Campus AI" : "Ask Campus AI",
+        );
+        if (open) {
+          $("tip").hidden = true;
+          $("question").focus();
+          scrollChat();
+        }
+      }
+
+      /* ---------- chat messages ---------- */
+      function addMsg(kind, text) {
+        const wrap = el("div", "msg " + kind);
+        wrap.append(el("div", "bubble", text));
+        $("msgs").append(wrap);
+        scrollChat();
+        return wrap;
+      }
+
+      /* a bot answer with click-to-open Sources / Prompt / Checks */
+      function addAnswer(d) {
+        const wrap = el("div", "msg bot");
+        const b = el("div", "bubble");
+        d.answer.split(/(\[S\d+\])/).forEach((part) => {
+          const m = part.match(/^\[(S\d+)\]$/);
+          if (m) {
+            const c = el("button", "cite", m[1]);
+            c.type = "button";
+            c.title = "Show this source";
+            c.onclick = () => {
+              toggle("src", true);
+              flash(m[1]);
+            };
+            b.append(c);
+          } else b.append(document.createTextNode(part));
+        });
+        wrap.append(b);
+
+        const label =
+          { evidence: "Evidence only", rag: "RAG", plain: "LLM only" }[
+            d.answer_mode
+          ] || d.answer_mode;
+        const mini = el("div", "mini");
+        mini.append(el("span", "", `${label} · ${d.seconds}s`));
+        const panels = {},
+          buttons = {};
+
+        function addPanel(key, title, build) {
+          const btn = el("button", "", title);
+          btn.type = "button";
+          btn.setAttribute("aria-expanded", "false");
+          const panel = el("div", "panel");
+          panel.hidden = true;
+          build(panel);
+          btn.onclick = () => toggle(key);
+          mini.append(btn);
+          panels[key] = panel;
+          buttons[key] = btn;
+        }
+        function toggle(key, forceOpen) {
+          const open = forceOpen ? true : panels[key].hidden;
+          panels[key].hidden = !open;
+          buttons[key].setAttribute("aria-expanded", open);
+          if (open)
+            setTimeout(
+              () =>
+                panels[key].scrollIntoView({
+                  behavior: "smooth",
+                  block: "nearest",
+                }),
+              30,
+            );
+        }
+        function flash(label) {
+          const t = panels.src.querySelector(`[data-label="${label}"]`);
+          if (!t) return;
+          t.classList.add("flash");
+          setTimeout(() => t.classList.remove("flash"), 1600);
+        }
+
+        // Sources
+        const max = Math.max(...d.hits.map((h) => h.score), 0.0001);
+        addPanel("src", `Sources (${d.hits.length})`, (p) => {
+          for (const h of d.hits) {
+            const a = el("article", "hit");
+            a.dataset.label = h.label;
+            const head = el("header");
+            head.append(
+              el("span", "tag", h.label),
+              el("strong", "", h.source),
+              el("span", "meta", `page ${h.page} · chunk ${h.chunk}`),
+            );
+            const bar = el("span", "bar");
+            const i = el("i");
+            const s = el("span");
+            s.style.width =
+              Math.max(2, Math.min(100, (h.score / max) * 100)) + "%";
+            i.append(s);
+            bar.append(i, document.createTextNode("cosine " + h.score));
+            head.append(bar);
+            a.append(head, el("p", "", h.text));
+            p.append(a);
+          }
+          if (d.answer_mode === "plain")
+            p.prepend(
+              el(
+                "small",
+                "",
+                "LLM-only mode: these passages are shown for comparison but were not sent to the LLM.",
+              ),
+            );
+        });
+        // Prompt
+        addPanel("prompt", "Prompt", (p) => {
+          p.append(el("pre", "", d.prompt || ""));
+          p.append(
+            el(
+              "small",
+              "",
+              "The RAG system instruction is visible as SYSTEM in rag.py. The prompt above is the user message.",
+            ),
+          );
+        });
+        // Checks
+        if (d.citations) {
+          const c = d.citations;
+          addPanel("chk", "Citation check", (p) => {
+            const row = el("div", "checks");
+            row.append(
+              el(
+                "span",
+                "pill " + (c.has_citation ? "ok" : "bad"),
+                c.has_citation ? "Has citation label" : "No citation label",
+              ),
+            );
+            if (c.cited.length)
+              row.append(
+                el("span", "pill neutral", "Cited: " + c.cited.join(", ")),
+              );
+            if (c.unknown.length)
+              row.append(
+                el(
+                  "span",
+                  "pill bad",
+                  "Unknown labels: " + c.unknown.join(", "),
+                ),
+              );
+            p.append(
+              row,
+              el(
+                "small",
+                "",
+                "Label syntax only; manually verify support for each claim.",
+              ),
+            );
+          });
+        }
+
+        wrap.append(mini);
+        Object.values(panels).forEach((p) => wrap.append(p));
+        $("msgs").append(wrap);
+        scrollChat();
+      }
+
+      function typing() {
+        const w = el("div", "msg bot");
+        const b = el("div", "bubble typing");
+        b.append(el("span"), el("span"), el("span"));
+        w.append(b);
+        $("msgs").append(w);
+        scrollChat();
+        return w;
+      }
+      function welcome() {
+        $("msgs").replaceChildren();
+        addMsg(
+          "bot",
+          "Hi! I answer questions from your campus documents.\n\n1. Build an index on the main page.\n2. Pick an answer mode below.\n3. Ask me anything — click Sources, Prompt or Citation check under an answer to inspect it.",
+        );
+        addMsg(
+          "sys",
+          "Questions are independent: I do not remember earlier messages or resolve follow-up pronouns.",
+        );
+      }
+
+      /* ---------- indexing ---------- */
+      async function buildIndex(sample) {
+        if (busy) return;
+        indexed = false;
+        setLive(false, "Building index…");
+        setBusy(true);
+        $("status").textContent =
+          "Working… Model requests can take several minutes on CPU.";
+        try {
+          let files = [];
+          if (!sample) {
+            const chosen = [...$("files").files];
+            if (!chosen.length) throw Error("Select documents first.");
+            if (chosen.reduce((s, f) => s + f.size, 0) > 5000000)
+              throw Error("Keep files below 5 MB total.");
+            for (const f of chosen) {
+              const bytes = new Uint8Array(await f.arrayBuffer());
+              let bin = "";
+              for (let i = 0; i < bytes.length; i += 8192)
+                bin += String.fromCharCode.apply(
+                  null,
+                  bytes.subarray(i, i + 8192),
+                );
+              files.push({ name: f.name, data: btoa(bin) });
+            }
+          }
+          const d = await api("/api/index", {
+            sample,
+            files,
+            mode: $("mode").value,
+            size: Number($("size").value),
+            overlap: Number($("overlap").value),
+          });
+          indexed = true;
+          $("stats").hidden = false;
+          $("s-chunks").textContent = d.chunks;
+          $("s-mode").textContent =
+            d.mode === "semantic" ? "Semantic" : "TF-IDF";
+          $("s-build").textContent = d.seconds + "s";
+          $("s-ask").textContent = "–";
+          $("preview").textContent = JSON.stringify(d.preview, null, 2);
+          const pb = $("previewBox");
+          pb.replaceChildren();
+          d.preview.forEach((c) => {
+            const div = el("div", "chunk");
+            div.append(
+              el("b", "", `${c.source} · page ${c.page} · chunk ${c.number}`),
+            );
+            div.append(
+              el(
+                "div",
+                "",
+                c.text.length > 220 ? c.text.slice(0, 220) + "…" : c.text,
+              ),
+            );
+            pb.append(div);
+          });
+          $("status").textContent =
+            `Built ${d.chunks} chunks using ${d.mode} retrieval in ${d.seconds}s. ${(d.warnings || []).join(" ")}`;
+          setLive(true, `${d.chunks} chunks ready`);
+          addMsg(
+            "sys",
+            `Index ready: ${d.chunks} chunks · ${d.mode} retrieval. Go ahead and ask a question.`,
+          );
+        } catch (e) {
+          $("status").textContent = e.message;
+          setLive(false, "No index yet");
+          addMsg("err", e.message);
+        } finally {
+          setBusy(false);
+        }
+      }
+
+      /* ---------- asking ---------- */
+      async function ask(q) {
+        if (busy) return;
+        q = (q ?? $("question").value).trim();
+        if (!q) return;
+        addMsg("user", q);
+        $("question").value = "";
+        autosize();
+        if (!indexed) {
+          addMsg(
+            "err",
+            "Build an index first (close the chat → “Build sample index”).",
+          );
+          return;
+        }
+        setBusy(true);
+        const t = typing();
+        $("status").textContent =
+          "Working… Model requests can take several minutes on CPU.";
+        try {
+          const d = await api("/api/ask", {
+            question: q,
+            k: Number($("k").value),
+            answer_mode: $("answer_mode").value,
+            model: $("model").value,
+          });
+          t.remove();
+          addAnswer(d);
+          $("s-ask").textContent = d.seconds + "s";
+          $("status").textContent =
+            `${d.answer_mode} mode · ${d.seconds}s. Similarity is not confidence.`;
+        } catch (e) {
+          t.remove();
+          addMsg("err", e.message);
+          $("status").textContent = e.message;
+        } finally {
+          setBusy(false);
+          $("question").focus();
+        }
+      }
+
+      /* ---------- wiring ---------- */
+      function autosize() {
+        const q = $("question");
+        q.style.height = "auto";
+        q.style.height = Math.min(q.scrollHeight, 120) + "px";
+      }
+      $("sample").onclick = () => buildIndex(true);
+      $("upload").onclick = () => buildIndex(false);
+      $("form").onsubmit = (e) => {
+        e.preventDefault();
+        ask();
+      };
+      $("question").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          ask();
+        }
+      });
+      $("question").addEventListener("input", autosize);
+      $("clear").onclick = welcome;
+      $("chatLauncher").onclick = () =>
+        setChatOpen(!$("chatPopup").classList.contains("open"));
+      $("closeChat").onclick = () => setChatOpen(false);
+      $("heroChat").onclick = () => setChatOpen(true);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && $("chatPopup").classList.contains("open"))
+          setChatOpen(false);
+      });
+
+      welcome();
+      fetch("/api/status")
+        .then((r) => r.json())
+        .then((s) => {
+          if (s.indexed) {
+            indexed = true;
+            setLive(true, `${s.chunks} chunks ready`);
+          }
+        })
+        .catch(() => {});
+    </script>
+  </body>
+</html>
